@@ -6,8 +6,26 @@ import { MaterialNode } from '@react-three/fiber'
 import { TextureLoader } from 'three/src/loaders/TextureLoader'
 
 import { Canvas, useFrame, ThreeElements, extend, Object3DNode, useLoader } from '@react-three/fiber'
-import { Effects, OrbitControls, OrthographicCamera, Line } from '@react-three/drei'
+import { Effects, OrbitControls, OrthographicCamera, Line, Trail } from '@react-three/drei'
 import { UnrealBloomPass } from 'three-stdlib'
+
+const colors = [
+  0xed6a5a,
+  0xf4f1bb,
+  0x9bc1bc,
+  0x5ca4a9,
+  0xe6ebe0,
+  0xf0b67f,
+  0xfe5f55,
+  0xd6d1b1,
+  0xc7efcf,
+  0xeef5db,
+  0x50514f,
+  0xf25f5c,
+  0xffe066,
+  0x247ba0,
+  0x70c1b3
+];
 
 declare module '@react-three/fiber' {
   interface ThreeElements {
@@ -63,7 +81,24 @@ const usePersonControls = () => {
   return movement
 }
 
+function CameraDriver(props: any) {
+  const [ rotation, setRotation ] = React.useState<any>({ x: 0, y: 0, z: 0 })
+  useFrame((state, delta) => {
+    setRotation({
+      x: rotation.x + 0.1 * delta * Math.random(),
+      y: rotation.y + 0.1 * delta * Math.random(),
+      z: rotation.z + 0.1 * delta * Math.random()
+    })
+    state.camera.rotation.set(rotation.x, rotation.y, rotation.z);
+    state.camera.updateProjectionMatrix();
+  })
+  return (
+    <></>
+  )
+}
+
 function Ball(props: any) {
+  const radius = 5;
 
   const [ vx, setVx ] = React.useState(60);
   const [ vy, setVy ] = React.useState(-120);
@@ -71,7 +106,23 @@ function Ball(props: any) {
 
   const [ color, setColor ] = React.useState("hotpink");
 
+  const [ shakeIntensity, setShakeIntensity ] = React.useState(0);
+
   useFrame((state, delta) => {
+    
+    if (shakeIntensity > 0) {
+      state.camera.position.set(0, 0, (Math.random() - 0.5) * shakeIntensity)
+      state.camera.updateProjectionMatrix();
+
+      let nextShake = shakeIntensity * 0.9;
+      if (nextShake < 10) {
+        nextShake = 0;
+        state.camera.position.set(0, 0, 0);
+      }
+      setShakeIntensity(nextShake);
+    }
+
+    
     ballRef.current.position.x += delta * vx;
     ballRef.current.position.y += delta * vy;
 
@@ -93,20 +144,50 @@ function Ball(props: any) {
     }
 
     // very inefficient
-    for (let block of props.blocks) {
-      let blockBounds = [block.x, block.y, block.x + 30, block.y - 10];
+    props.blocks.forEach((block: any, index: number) => {
+      if (props.blownUpBlocks.has(index)) { return; }
+
+      let ballX = ballRef.current.position.x;
+      let ballY = ballRef.current.position.y;
+      
       // check collision with bottom side
-      // if (blockBounds)
-    }
+      if (ballX >= block.x && ballX <= block.x + 30 &&
+          ballY < block.y - 10 && ballY + radius >= block.y - 10) {
+        setVy(-vy);
+        props.blowUpBlock(index);
+        setShakeIntensity(100);
+      }
+      // check collision with top side
+      else if (ballX >= block.x && ballX <= block.x + 30 &&
+        ballY > block.y - 10 && ballY - radius <= block.y - 10) {
+        setVy(-vy);
+        props.blowUpBlock(index);
+        setShakeIntensity(100);
+      }
+      // check collision with left side
+      else if (ballY <= block.y && ballY >= block.y - 10 &&
+        ballX < block.x && ballX + radius >= block.x) {
+        setVx(-vx);
+        props.blowUpBlock(index);
+        setShakeIntensity(100);
+      }
+      // check collision with right side
+      else if (ballY <= block.y && ballY >= block.y - 10 &&
+        ballX > block.x + 30 && ballX - radius <= block.x + 30) {
+        setVx(-vx);
+        props.blowUpBlock(index);
+        setShakeIntensity(100);
+      }
+    })
 
     props.setBallState(ballRef.current.position.x, ballRef.current.position.y, vx, vy)
   })
 
   return (
     <mesh
-      position={[50, 0, 100]}
+      position={[50, 0, 0]}
       ref={ballRef}>
-      <sphereGeometry args={[5, 32, 16]}>
+      <sphereGeometry args={[radius, 32, 16]}>
       </sphereGeometry>
       <meshStandardMaterial emissiveIntensity={2} emissive={color} color={color} />
     </mesh>
@@ -145,30 +226,34 @@ function Paddle(props: any) {
 }
 
 function Block(props: any) {
-  const colors = [
-    0xed6a5a,
-    0xf4f1bb,
-    0x9bc1bc,
-    0x5ca4a9,
-    0xe6ebe0,
-    0xf0b67f,
-    0xfe5f55,
-    0xd6d1b1,
-    0xc7efcf,
-    0xeef5db,
-    0x50514f,
-    0xf25f5c,
-    0xffe066,
-    0x247ba0,
-    0x70c1b3
-  ];
-
-  let color = new THREE.Color(colors[props.index % colors.length]);
+  let color = new THREE.Color(colors[props.index % colors.length]); // colors are global, sorry code-style
 
   return (
     <mesh
       position={[props.blockX, props.blockY, 0]}>
       <boxGeometry args={[30, 10, 10]} />
+      <meshStandardMaterial emissiveIntensity={0.5} emissive={color} color={color} />
+    </mesh>
+  )
+}
+
+function Particle(props: any) {
+  let color = new THREE.Color(props.color);
+  const [vy, setVy] = React.useState(props.vy);
+  const particleRef = React.useRef<any>();
+
+  useFrame((state, delta) => {
+    particleRef.current.position.x += delta * props.vx;
+    particleRef.current.position.y += delta * vy;
+    particleRef.current.position.z += delta * props.vx;
+    particleRef.current.rotation.x += delta * props.vx;
+
+    setVy(vy - delta * 5); // gravity
+  })
+
+  return (
+    <mesh position={[props.x, props.y, 0]} ref={particleRef}>
+      <boxGeometry args={[props.radius, props.radius, props.radius]} />
       <meshStandardMaterial emissiveIntensity={0.5} emissive={color} color={color} />
     </mesh>
   )
@@ -196,6 +281,9 @@ function App() {
     }
   }
   const [ blocks, setBlocks ] = React.useState<any>(initBlocks);
+  const [ blownUpBlocks, setBlownUpBlocks ] = React.useState(new Set<number>());
+
+  const [ particles, setParticles ] = React.useState<any>([]);
 
   const setPaddleState = (x: number, vx: number) => {
     setState({...state, paddleX: x, paddleVX: vx})
@@ -207,10 +295,24 @@ function App() {
 
   // this is super inefficient ...
   const blowUpBlock = (index: number) => {
-    setBlocks(blocks.filter((_: any, _index: number) => {
-      if (index === _index) return false;
-      else return true;
-    }))
+    let newSet = new Set(blownUpBlocks);
+    newSet.add(index);
+    setBlownUpBlocks(newSet);
+
+    let newParticles = [...particles];
+    for (let i = 0; i < 10; i++) {
+      let color = colors[index % colors.length];
+      newParticles.push(<Particle 
+        color={color}
+        x={blocks[index].x}
+        y={blocks[index].y}
+        vx={(Math.random() - 0.5) * 100}
+        vy={Math.random() * 60}
+        radius={Math.random() * 10}
+      />)
+    }
+
+    setParticles(newParticles)
   }
 
   return (
@@ -226,22 +328,44 @@ function App() {
         <meshStandardMaterial wireframe wireframeLinewidth={1}/>
       </mesh>
 
-      <OrbitControls />
+      { particles }
+
+      <CameraDriver />
+
+      {/* <OrbitControls /> */}
       <Paddle state={state} setPaddleState={setPaddleState} />
-      <Ball state={state} blocks={blocks} blowUpBlock={blowUpBlock} setBallState={setBallState}/>
-      
-      { blocks.map((block: any, index: number) => <Block blockX={block.x} blockY={block.y} index={index}/>)}
+      <Trail
+        width={0.1} // Width of the line
+        color={'hotpink'} // Color of the line
+        length={10} // Length of the line
+        decay={1} // How fast the line fades away
+        local={false} // Wether to use the target's world or local positions
+        stride={0} // Min distance between previous and current point
+        interval={1} // Number of frames to wait before next calculation
+        target={undefined} // Optional target. This object will produce the trail.
+        attenuation={(width) => width} // A function to define the width in each point along it.
+      >
+        <Ball state={state} blocks={blocks} blownUpBlocks={blownUpBlocks} blowUpBlock={blowUpBlock} setBallState={setBallState}/>
+      </Trail>
+
+      { blocks.map((block: any, index: number) => {
+        // ew this is ugly, but good for now (adding a .filter() fucks with the indices)
+        if (blownUpBlocks.has(index)) { return <></> }
+        else {
+          return <Block blockX={block.x} blockY={block.y} index={index}/>
+        }
+      })}
 
       <OrthographicCamera
         makeDefault
         zoom={1}
-        top={200}
-        bottom={-50}
-        left={-50}
-        right={150}
-        near={-200}
-        far={200}
-        position={[-50, 0, 0]}
+        top={300}
+        bottom={-300}
+        left={-300}
+        right={300}
+        near={-400}
+        far={400}
+        position={[0, 0, 0]}
       />
     </Canvas>
   );
